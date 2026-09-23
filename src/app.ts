@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type { BrowserSessions } from './browser.ts';
 import { ResearchError } from './errors.ts';
+import { quickPrice, type QuickPriceRequest } from './quick-price.ts';
 import { research, type ResearchRequest } from './research.ts';
 
 export interface AppOptions {
@@ -19,6 +20,16 @@ const requestSchema = {
   },
 } as const;
 
+const quickPriceSchema = {
+  type: 'object',
+  required: ['site'],
+  additionalProperties: false,
+  properties: {
+    site: { type: 'string', minLength: 1, maxLength: 2048 },
+    variant: { type: 'string', pattern: '^[0-9]{1,20}$' },
+  },
+} as const;
+
 export function buildApp(opts: AppOptions): FastifyInstance {
   const app = Fastify({ logger: opts.logger ?? false });
   const deps = { sessions: opts.sessions, allowPrivateHosts: opts.allowPrivateHosts };
@@ -28,6 +39,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   );
   app.post<{ Body: ResearchRequest }>('/research', { schema: { body: requestSchema } }, (req) =>
     research(deps, req.body),
+  );
+  app.get<{ Querystring: QuickPriceRequest }>('/sh', { schema: { querystring: quickPriceSchema } }, (req) =>
+    quickPrice(deps, req.query),
   );
 
   app.get('/health', async (_req, reply) => {
@@ -45,6 +59,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     }
     if (e.statusCode && e.statusCode < 500) {
       return reply.code(e.statusCode).send({ error: { code: 'bad_request', message: e.message } });
+    }
+    const netError = /net::(ERR_[A-Z_]+)/.exec(e.message ?? '');
+    if (netError) {
+      return reply.code(502).send({ error: { code: 'site_unreachable', message: `Could not connect to the store (${netError[1]})` } });
     }
     req.log.error(err);
     return reply.code(502).send({ error: { code: 'upstream_error', message: 'Failed to research the store' } });

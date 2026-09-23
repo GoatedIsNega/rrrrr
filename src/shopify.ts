@@ -1,8 +1,8 @@
 import { ResearchError } from './errors.ts';
 
 export type Target =
-  | { kind: 'store'; origin: string; hostname: string }
-  | { kind: 'product'; origin: string; hostname: string; handle: string };
+  | { kind: 'store'; origin: string; hostname: string; variantId?: string }
+  | { kind: 'product'; origin: string; hostname: string; handle: string; variantId?: string };
 
 export interface Variant {
   id: number;
@@ -63,10 +63,12 @@ export function parseTarget(input: string): Target {
   }
   // Matches /products/x, /collections/y/products/x and locale-prefixed paths.
   const match = /\/products\/([^/]+?)(?:\.(?:js|json|oembed|xml))?\/?$/.exec(url.pathname);
+  const variant = url.searchParams.get('variant');
+  const extra = variant && /^\d+$/.test(variant) ? { variantId: variant } : {};
   if (match) {
-    return { kind: 'product', origin: url.origin, hostname: url.hostname, handle: match[1]! };
+    return { kind: 'product', origin: url.origin, hostname: url.hostname, handle: match[1]!, ...extra };
   }
-  return { kind: 'store', origin: url.origin, hostname: url.hostname };
+  return { kind: 'store', origin: url.origin, hostname: url.hostname, ...extra };
 }
 
 export function htmlToText(html: string | null | undefined): string {

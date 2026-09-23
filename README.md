@@ -1,7 +1,7 @@
 # Shopify Product Researcher
 
-A fast HTTP endpoint that researches any public Shopify storefront, either a whole
-store or a single product, using a **fresh, isolated browser session for every request**.
+A fast HTTP service that researches any public Shopify storefront and reads the **real checkout
+price**, using a **fresh, isolated browser session for every request**.
 
 ## Quick start
 
@@ -11,12 +11,48 @@ pnpm start            # listens on :3000
 
 curl 'localhost:3000/research?url=allbirds.com&limit=250'
 curl 'localhost:3000/research?url=https://www.allbirds.com/products/mens-strider-explore'
+curl 'localhost:3000/sh?site=allbirds.com'
 ```
 
 Requires Node ≥ 22.18. TypeScript runs natively, so there's no build step. On a fresh Linux
 host you may need Chromium's system libraries: `pnpm exec playwright install --with-deps chromium`.
 
 ## API
+
+### `GET /sh?site=…&variant=…` returns the checkout price
+
+Adds one unit to a brand-new cart through Shopify's cart permalink (`/cart/<variantId>:1`), follows
+it into checkout, and reads the order summary the checkout page server-renders. The price therefore
+includes anything checkout applies (automatic discounts, market currency), not just the listed price.
+
+| Param     | Description |
+|-----------|-------------|
+| `site`    | Store (`xyz.com`) or product URL (`…/products/<handle>`, optionally `?variant=<id>`). |
+| `variant` | Optional variant ID. This is the **fastest** option (~1.5 s), because it skips the product lookup and goes straight to `/cart/<variant>:1`. |
+
+With only a store, the first purchasable product is used (gift cards and $0 add-ons are skipped). If
+checkout rejects it, up to two more products are tried. With a product URL, the first available
+variant is used.
+
+```json
+{
+  "price": 140,
+  "currency": "USD",
+  "timetaken": "1.53s",
+  "listPrice": 140, "compareAtPrice": null,
+  "subtotal": 140, "total": 140, "tax": 0, "savings": 0,
+  "available": true, "issues": [],
+  "product": { "title": "Women's Dasher NZ…", "variant": "5", "variantId": 41271218896976, "sku": "A12464W050",
+               "vendor": "Allbirds", "productType": "Shoes", "url": "…", "image": "…", "options": [ … ] },
+  "store": { "name": "Allbirds", "domain": "www.allbirds.com" }
+}
+```
+
+- `price` is the unit price after checkout discounts. `listPrice` and `compareAtPrice` are the variant's own prices.
+- `total` and `tax` are what checkout knows before a shipping address is entered. Many stores report tax as 0 until then.
+- Sold-out variants still return prices, with `available: false` and `issues: [{ "code": "MERCHANDISE_OUT_OF_STOCK", … }]`.
+- Errors add `variant_not_found` (404), `checkout_unavailable` (502: cart rules or bot protection kept checkout
+  from opening), and `site_unreachable` (502: DNS/TLS/connection failure).
 
 ### `GET /research?url=…&limit=…` / `POST /research` `{ "url": "…", "limit": 250 }`
 
@@ -53,6 +89,9 @@ Browser status and current session counts.
 - **Parallel:** metadata and every `products.json` page are fetched concurrently in separate tabs.
 - **Lean fallback:** if a store disables the AJAX API, the product page is loaded with every
   subresource blocked, and data is read from JSON-LD/OpenGraph.
+- **Checkout without rendering:** `/sh` blocks every checkout script, stylesheet, and image, and
+  parses the `serialized-graphql` data from the checkout HTML. `skip_shop_pay=true` avoids a redirect
+  through shop.app. The remaining ~1.5 s is Shopify creating the cart and rendering checkout.
 - A realistic user agent replaces `HeadlessChrome`, which some storefronts block.
 
 ## Configuration

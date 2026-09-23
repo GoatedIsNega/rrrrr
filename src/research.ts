@@ -104,7 +104,7 @@ async function researchProduct(ctx: BrowserContext, target: Extract<Target, { ki
   return { kind: 'product' as const, source: 'html', store, product };
 }
 
-async function getJson(ctx: BrowserContext, url: string): Promise<JsonResult> {
+export async function getJson(ctx: BrowserContext, url: string): Promise<JsonResult> {
   const page = await ctx.newPage();
   try {
     // 'commit' returns as soon as headers arrive; body() then waits only for the payload.
@@ -180,7 +180,7 @@ function assertShopifyJson(res: JsonResult, key: string): void {
   }
 }
 
-function isPasswordPage(url: string): boolean {
+export function isPasswordPage(url: string): boolean {
   try {
     return new URL(url).pathname.replace(/\/$/, '') === '/password';
   } catch {
@@ -188,6 +188,6 @@ function isPasswordPage(url: string): boolean {
   }
 }
 
-function passwordError(): ResearchError {
+export function passwordError(): ResearchError {
   return new ResearchError(423, 'password_protected', 'The store is password protected');
 }
