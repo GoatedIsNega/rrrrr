@@ -8,6 +8,7 @@ export interface Config {
   maxConcurrentSessions: number;
   requestTimeoutMs: number;
   allowPrivateHosts: boolean;
+  checkoutAssetCacheMb: number;
 }
 
 function int(name: string, fallback: number): number {
@@ -30,5 +31,7 @@ export function loadConfig(): Config {
     maxConcurrentSessions: int('MAX_CONCURRENT_SESSIONS', 8),
     requestTimeoutMs: int('REQUEST_TIMEOUT_MS', 15_000),
     allowPrivateHosts: process.env.ALLOW_PRIVATE_HOSTS === 'true',
+    // 0 disables sharing of Shopify's immutable checkout bundles between sessions.
+    checkoutAssetCacheMb: process.env.CHECKOUT_ASSET_CACHE_MB === '0' ? 0 : int('CHECKOUT_ASSET_CACHE_MB', 64),
   };
 }

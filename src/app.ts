@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import { AssetCache } from './asset-cache.ts';
 import type { BrowserSessions } from './browser.ts';
 import { ResearchError } from './errors.ts';
 import { quickPrice, type QuickPriceRequest } from './quick-price.ts';
@@ -7,6 +8,8 @@ import { research, type ResearchRequest } from './research.ts';
 export interface AppOptions {
   sessions: BrowserSessions;
   allowPrivateHosts: boolean;
+  /** Shared cache of Shopify's immutable checkout bundles; `null` disables it. */
+  assetCache?: AssetCache | null;
   logger?: FastifyServerOptions['logger'];
 }
 
@@ -27,12 +30,27 @@ const quickPriceSchema = {
   properties: {
     site: { type: 'string', minLength: 1, maxLength: 2048 },
     variant: { type: 'string', pattern: '^[0-9]{1,20}$' },
+    country: { type: 'string', pattern: '^[A-Za-z]{2}$' },
+    zip: { type: 'string', maxLength: 20 },
+    province: { type: 'string', maxLength: 100 },
+    state: { type: 'string', maxLength: 100 },
+    city: { type: 'string', maxLength: 100 },
+    address1: { type: 'string', maxLength: 200 },
+    address2: { type: 'string', maxLength: 200 },
+    first_name: { type: 'string', maxLength: 100 },
+    last_name: { type: 'string', maxLength: 100 },
+    phone: { type: 'string', maxLength: 30 },
+    email: { type: 'string', maxLength: 200, format: 'email' },
   },
 } as const;
 
 export function buildApp(opts: AppOptions): FastifyInstance {
   const app = Fastify({ logger: opts.logger ?? false });
-  const deps = { sessions: opts.sessions, allowPrivateHosts: opts.allowPrivateHosts };
+  const deps = {
+    sessions: opts.sessions,
+    allowPrivateHosts: opts.allowPrivateHosts,
+    assetCache: opts.assetCache === undefined ? new AssetCache() : opts.assetCache,
+  };
 
   app.get<{ Querystring: ResearchRequest }>('/research', { schema: { querystring: requestSchema } }, (req) =>
     research(deps, req.query),
@@ -46,7 +64,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.get('/health', async (_req, reply) => {
     const healthy = await opts.sessions.isHealthy();
-    return reply.code(healthy ? 200 : 503).send({ ok: healthy, sessions: opts.sessions.stats });
+    return reply
+      .code(healthy ? 200 : 503)
+      .send({ ok: healthy, sessions: opts.sessions.stats, checkoutAssetCache: deps.assetCache?.stats ?? null });
   });
 
   app.setErrorHandler((err, req, reply) => {

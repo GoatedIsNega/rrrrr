@@ -102,75 +102,127 @@ const money = (amount: string) => ({ amount, currencyCode: 'EUR', __typename: 'M
 const constraint = (amount: string) => ({ value: money(amount), __typename: 'MoneyValueConstraint' });
 const attr = (value: unknown) => JSON.stringify(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
-/** Trimmed-down copy of the structure Shopify's one-page checkout server-renders. */
-function checkoutPage(variantId: number): string {
+export const CHECKOUT_APP_PATH = '/cdn/shopifycloud/checkout-web/assets/c1/app.test123.js';
+
+type Delivery = 'none' | 'pending' | 'unselected' | 'selected' | 'unshippable';
+type Address = Record<string, string>;
+
+function deliveryTerms(delivery: Delivery, address: Address, lineTotal: string) {
+  if (delivery === 'none') return { __typename: 'UnavailableTerms' };
+  if (delivery === 'pending') return { __typename: 'PendingTerms' };
+  const strategies =
+    delivery === 'unshippable'
+      ? []
+      : [
+          { handle: 'std', title: 'Standard', methodType: 'SHIPPING', carrierName: 'Post', amount: constraint('5.0'), amountAfterDiscounts: constraint('5.0'), minDeliveryDateTime: '2026-10-01', maxDeliveryDateTime: '2026-10-05' },
+          { handle: 'exp', title: 'Express', methodType: 'SHIPPING', carrierName: 'Post', amount: constraint('15.0'), amountAfterDiscounts: constraint('15.0'), minDeliveryDateTime: null, maxDeliveryDateTime: null },
+        ];
+  return {
+    __typename: 'FilledDeliveryTerms',
+    deliveryLines: [
+      {
+        destinationAddress: { address1: address.address1 ?? null, city: address.city ?? '', zoneCode: address.province ?? null, postalCode: address.zip ?? null, countryCode: address.country },
+        selectedDeliveryStrategy: delivery === 'selected' ? { handle: 'std' } : null,
+        availableDeliveryStrategies: strategies,
+        targetMerchandise: { total: lineTotal },
+      },
+    ],
+  };
+}
+
+/** Trimmed-down copy of Shopify's negotiation result (server-rendered and from `Proposal`). */
+function negotiation(variantId: number, delivery: Delivery = 'none', address: Address = {}) {
   const soldOut = variantId === 12;
+  const priced = delivery === 'selected';
+  // 8% tax for NY once an address is known.
+  const tax = priced && address.province === 'NY' ? '0.68' : '0.0';
+  const total = priced ? (8.5 + 5 + Number(tax)).toFixed(2) : null;
+  return {
+    result: {
+      __typename: 'NegotiationResultAvailable',
+      buyerProposal: {},
+      sellerProposal: {
+        merchandise: {
+          merchandiseLines: [
+            {
+              merchandise: {
+                variantId: `gid://shopify/ProductVariant/${variantId}`,
+                title: 'Blue Widget',
+                subtitle: soldOut ? 'Large' : 'Small',
+                sku: soldOut ? 'BW-L' : 'BW-S',
+                price: money(soldOut ? '15.0' : '10.0'),
+                compareAtPrice: soldOut ? null : money('20.0'),
+                product: { id: 'gid://shopify/Product/1', vendor: 'Acme', productType: 'Widgets' },
+                productUrl: '/products/blue-widget',
+                image: { url: 'https://cdn.example.com/blue.jpg' },
+                options: [{ name: 'Size', value: soldOut ? 'Large' : 'Small' }],
+                requiresShipping: true,
+              },
+              quantity: { items: { value: 1 } },
+              totalAmount: constraint(soldOut ? '15.0' : '8.5'),
+              lineAllocations: [
+                {
+                  quantity: 1,
+                  totalAmountBeforeReductions: money(soldOut ? '15.0' : '10.0'),
+                  // An automatic discount only applied at checkout.
+                  totalAmountAfterDiscounts: money(soldOut ? '15.0' : '8.5'),
+                },
+              ],
+            },
+          ],
+        },
+        delivery: deliveryTerms(delivery, address, '8.5'),
+        subtotalBeforeTaxesAndShipping: constraint(soldOut ? '0.0' : '8.5'),
+        runningTotal: constraint(total ?? (soldOut ? '0.0' : '8.5')),
+        checkoutTotal: total ? constraint(total) : { __typename: 'AnyConstraint' },
+        totalSavings: constraint(soldOut ? '0.0' : '1.5'),
+        tax: { totalTaxAmount: constraint(tax) },
+        buyerIdentity: { customer: { presentmentCurrency: 'EUR' } },
+      },
+    },
+    errors: [
+      { code: 'BUYER_IDENTITY_MISSING_CONTACT_METHOD', nonLocalizedMessage: 'Missing a valid contact method.', target: '$.buyerIdentity' },
+      ...(delivery !== 'none' && !address.first_name
+        ? [{ code: 'DELIVERY_FIRST_NAME_REQUIRED', nonLocalizedMessage: 'A first name is required.', target: '$.delivery' }]
+        : []),
+      ...(delivery === 'unshippable'
+        ? [{ code: 'DELIVERY_NO_DELIVERY_STRATEGY_AVAILABLE', nonLocalizedMessage: 'No delivery strategy available.', target: '$.delivery' }]
+        : []),
+      ...(soldOut
+        ? [{ code: 'MERCHANDISE_OUT_OF_STOCK', nonLocalizedMessage: 'This item is out of stock.', target: '$.merchandise.merchandiseLines[0]' }]
+        : []),
+    ],
+  };
+}
+
+function checkoutPage(variantId: number, thirdPartyOrigin: string): string {
   const graphql = {
     // Real keys are per-deploy hashes; the parser must not depend on them.
     'hashedquerykey{}': { shop: { id: 'gid://shopify/Shop/123' } },
-    'anotherhashedkey{"queueToken":null}': {
-      session: {
-        negotiate: {
-          result: {
-            __typename: 'NegotiationResultAvailable',
-            buyerProposal: {},
-            sellerProposal: {
-              merchandise: {
-                merchandiseLines: [
-                  {
-                    merchandise: {
-                      variantId: `gid://shopify/ProductVariant/${variantId}`,
-                      title: 'Blue Widget',
-                      subtitle: soldOut ? 'Large' : 'Small',
-                      sku: soldOut ? 'BW-L' : 'BW-S',
-                      price: money(soldOut ? '15.0' : '10.0'),
-                      compareAtPrice: soldOut ? null : money('20.0'),
-                      product: { id: 'gid://shopify/Product/1', vendor: 'Acme', productType: 'Widgets' },
-                      productUrl: '/products/blue-widget',
-                      image: { url: 'https://cdn.example.com/blue.jpg' },
-                      options: [{ name: 'Size', value: soldOut ? 'Large' : 'Small' }],
-                      requiresShipping: true,
-                    },
-                    quantity: { items: { value: 1 } },
-                    lineAllocations: [
-                      {
-                        quantity: 1,
-                        totalAmountBeforeReductions: money(soldOut ? '15.0' : '10.0'),
-                        // An automatic discount only applied at checkout.
-                        totalAmountAfterDiscounts: money(soldOut ? '15.0' : '8.5'),
-                      },
-                    ],
-                  },
-                ],
-              },
-              subtotalBeforeTaxesAndShipping: constraint(soldOut ? '0.0' : '8.5'),
-              runningTotal: constraint(soldOut ? '0.0' : '8.5'),
-              checkoutTotal: { __typename: 'AnyConstraint' },
-              totalSavings: constraint(soldOut ? '0.0' : '1.5'),
-              tax: { totalTaxAmount: constraint('0.0') },
-              buyerIdentity: { customer: { presentmentCurrency: 'EUR' } },
-            },
-          },
-          errors: [
-            { code: 'BUYER_IDENTITY_MISSING_CONTACT_METHOD', nonLocalizedMessage: 'Missing a valid contact method.', target: '$.buyerIdentity' },
-            ...(soldOut
-              ? [{ code: 'MERCHANDISE_OUT_OF_STOCK', nonLocalizedMessage: 'This item is out of stock.', target: '$.merchandise.merchandiseLines[0]' }]
-              : []),
-          ],
-        },
-      },
-    },
+    'anotherhashedkey{"queueToken":null}': { session: { negotiate: negotiation(variantId) } },
   };
   return `<!doctype html><html><head>
 <meta name="serialized-shop" content="${attr({ name: 'Fake Store', domain: 'fake.example' })}">
 <meta name="serialized-graphql" content="${attr(graphql)}">
-<script src="/checkout-app.js"></script>
+<link rel="stylesheet" href="/slow-checkout.css">
+<script type="module" src="${CHECKOUT_APP_PATH}"></script>
+<script src="${thirdPartyOrigin}/tracker.js"></script>
 </head><body><div class="LoadingShell"></div></body></html>`;
 }
+
+/** Stand-in for Shopify's checkout app: re-negotiates until delivery is settled, like the real one. */
+const checkoutApp = `
+const post = () => fetch('/checkouts/internal/graphql/persisted?operationName=Proposal', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+}).then((r) => r.json());
+(async () => { for (let i = 0; i < 4; i++) await post(); })();
+`;
 
 export async function startFakeStore(opts: { password?: boolean; rejectVariants?: number[] } = {}): Promise<FakeStore> {
   const requests: FakeStore['requests'] = [];
   let counter = 0;
+  const sessions = new Map<string, { variantId: number; address: Address; proposals: number }>();
+  let port = 0;
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -212,10 +264,27 @@ export async function startFakeStore(opts: { password?: boolean; rejectVariants?
         return;
       case '/':
         return send(res, 200, 'text/html', homePage);
-      case '/checkout-app.js':
-        // Would stall the checkout if subresources were not blocked.
-        setTimeout(() => send(res, 200, 'text/javascript', ''), 10_000).unref();
+      case CHECKOUT_APP_PATH:
+        return send(res, 200, 'text/javascript', checkoutApp);
+      case '/slow-checkout.css':
+      case '/tracker.js':
+        // Would stall the checkout if these weren't blocked.
+        setTimeout(() => send(res, 200, 'text/plain', ''), 10_000).unref();
         return;
+      case '/checkouts/internal/graphql/persisted': {
+        const token = /cart_token=(\w+)/.exec(req.headers.cookie ?? '')?.[1];
+        const session = token ? sessions.get(token) : undefined;
+        if (!session) return send(res, 401, 'application/json', '{}');
+        session.proposals++;
+        const { address } = session;
+        // Like Shopify: rates arrive first, then a later proposal selects one; zip 00000 never settles.
+        const delivery: Delivery =
+          address.country === 'AQ' ? 'unshippable'
+          : address.zip === '00000' || session.proposals === 1 ? 'pending'
+          : session.proposals === 2 ? 'unselected'
+          : 'selected';
+        return send(res, 200, 'application/json', JSON.stringify({ data: { session: { negotiate: negotiation(session.variantId, delivery, address) } } }));
+      }
       default: {
         const cart = /^\/cart\/(\d+):1$/.exec(url.pathname);
         if (cart) {
@@ -227,17 +296,26 @@ export async function startFakeStore(opts: { password?: boolean; rejectVariants?
             res.writeHead(302, { location: '/' });
             return res.end();
           }
+          const address: Address = {};
+          for (const [key, value] of url.searchParams) {
+            const field = /^checkout\[shipping_address\]\[(\w+)\]$/.exec(key)?.[1];
+            if (field) address[field] = value;
+          }
+          const token = `t${++counter}`;
+          sessions.set(token, { variantId: Number(cart[1]), address, proposals: 0 });
           // Like Shopify, checkout only works with the cookie set by the cart permalink.
-          res.writeHead(302, { location: `/checkouts/cn/tok${cart[1]}/en-us`, 'set-cookie': `cart=${cart[1]}; Path=/` });
+          res.writeHead(302, { location: `/checkouts/cn/${token}/en-us`, 'set-cookie': `cart_token=${token}; Path=/` });
           return res.end();
         }
-        const co = /^\/checkouts\/cn\/tok(\d+)\/en-us$/.exec(url.pathname);
+        const co = /^\/checkouts\/cn\/(\w+)\/en-us$/.exec(url.pathname);
         if (co) {
-          if (!req.headers.cookie?.includes(`cart=${co[1]}`)) {
+          const session = sessions.get(co[1]!);
+          if (!session || !req.headers.cookie?.includes(`cart_token=${co[1]}`)) {
             res.writeHead(302, { location: '/' });
             return res.end();
           }
-          return send(res, 200, 'text/html', checkoutPage(Number(co[1])));
+          // "localhost" and "127.0.0.1" are different hosts to the browser, so this acts as a third party.
+          return send(res, 200, 'text/html', checkoutPage(session.variantId, `http://localhost:${port}`));
         }
         return send(res, 404, 'text/html', '<html>Not found</html>');
       }
@@ -245,7 +323,7 @@ export async function startFakeStore(opts: { password?: boolean; rejectVariants?
   });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
+  port = (server.address() as AddressInfo).port;
   return {
     origin: `http://127.0.0.1:${port}`,
     requests,

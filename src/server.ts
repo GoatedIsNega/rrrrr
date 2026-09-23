@@ -1,4 +1,5 @@
 import { buildApp } from './app.ts';
+import { AssetCache } from './asset-cache.ts';
 import { BrowserSessions } from './browser.ts';
 import { loadConfig } from './config.ts';
 
@@ -10,7 +11,8 @@ const sessions = new BrowserSessions({
 });
 await sessions.start();
 
-const app = buildApp({ sessions, allowPrivateHosts: config.allowPrivateHosts, logger: true });
+const assetCache = config.checkoutAssetCacheMb > 0 ? new AssetCache(config.checkoutAssetCacheMb * 1024 * 1024) : null;
+const app = buildApp({ sessions, allowPrivateHosts: config.allowPrivateHosts, assetCache, logger: true });
 app.addHook('onClose', () => sessions.close());
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

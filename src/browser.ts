@@ -46,7 +46,8 @@ export class BrowserSessions {
     }
   }
 
-  async run<T>(fn: (ctx: BrowserContext) => Promise<T>): Promise<T> {
+  /** `fn` receives the absolute deadline (ms epoch) so it can return partial results in time. */
+  async run<T>(fn: (ctx: BrowserContext, deadline: number) => Promise<T>): Promise<T> {
     if (this.#closed) throw new ResearchError(503, 'shutting_down', 'Service is shutting down');
     const deadline = Date.now() + this.#opts.timeoutMs;
     await this.#acquire(deadline);
@@ -75,7 +76,7 @@ export class BrowserSessions {
       const remaining = Math.max(1, deadline - Date.now());
       ctx.setDefaultTimeout(remaining);
       ctx.setDefaultNavigationTimeout(remaining);
-      return await fn(ctx);
+      return await fn(ctx, deadline);
     } catch (err) {
       if (timedOut || isPlaywrightTimeout(err)) throw timeoutError();
       throw err;
